@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Forex Contract Manager · Shivalik</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #fff; color: #0f0f0f; }
+    input, select, button, textarea { font-family: inherit; }
+    input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+    ::selection { background: #0f0f0f22; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ddd; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+const SYM  = { EUR:"€", USD:"$", INR:"₹" };
+const f    = (n,c) => n==null?"—":(SYM[c]||"")+Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fR   = (n)   => n==null?"—":Number(n).toFixed(4);
+const fM   = (n,c) => { const a=Math.abs(n),s=SYM[c]||""; return a>=1e9?s+(n/1e9).toFixed(2)+"B":a>=1e6?s+(n/1e6).toFixed(1)+"M":a>=1e3?s+(n/1e3).toFixed(0)+"K":f(n,c); };
+const todayISO   = () => new Date().toISOString().split("T")[0];
+const fmtISO     = (iso) => { const [y,m,d]=iso.split("-"); return `${d}.${m}.${y}`; };
+const fmtTime    = () => new Date().toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
+const fmtSnapLbl = () => `${fmtISO(todayISO())} · ${fmtTime()}`;
+const parseDel   = (del) => { const p=del.split("."); if(p.length!==3)return null; return new Date(+p[2],+p[1]-1,+p[0]); };
+const daysUntil  = (del) => { const d=parseDel(del); if(!d)return null; return Math.round((d-new Date())/(864e5)); };
+
+// ── Storage (localStorage) ────────────────────────────────────────────────────
+const LS = {
+  get: (k,fb) => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):fb; } catch { return fb; } },
+  set: (k,v)  => { try { localStorage.setItem(k,JSON.stringify(v)); } catch(e) { console.warn("Storage full",e); } },
+};
+const K = { inflow:"tms_ifl", master:"tms_mstr", personal:"tms_pers", receipts:"tms_rec", limits:"tms_lim", updated:"tms_upd", snaps:"tms_snaps" };
+
+// ── Constants ────────────────────────────────────────────────────────────────
+const BANK_CLR   = { SBI:"#0F6E56", HDFC:"#185FA5", UNION:"#534AB7", DBS:"#5F5E5A" };
+const BANK_LABEL = { SBI:"State Bank", HDFC:"HDFC Bank", UNION:"Union Bank", DBS:"DBS" };
+
+const MASTER_SEED = [
+  {id:"m1",  bk:"SBI",   cc:"EUR",st:"INR",num:"0853625FP0B00032", dt:"19.12.2025",amt:5000000,  sp:105.7500,pr:2.6068,tot:108.3568,val:541784205,    del:"30.06.2026"},
+  {id:"m2",  bk:"SBI",   cc:"EUR",st:"USD",num:"0853625KP0B00003", dt:"30.12.2025",amt:4000000,  sp:1.1766,  pr:0.0092,tot:1.1858,  val:4743200,       del:"30.06.2026"},
+  {id:"m3",  bk:"SBI",   cc:"EUR",st:"USD",num:"0853626KP0B00001", dt:"27.01.2026",amt:3000000,  sp:1.1864,  pr:0.0081,tot:1.1945,  val:3583500,       del:"30.06.2026"},
+  {id:"m4",  bk:"SBI",   cc:"USD",st:"INR",num:"0853625FP0B00025", dt:"29.07.2025",amt:8605485,  sp:86.8500, pr:1.4360,tot:88.2860, val:759743848.71,  del:"29.05.2026"},
+  {id:"m5",  bk:"SBI",   cc:"USD",st:"INR",num:"0853625FP0B00026", dt:"30.07.2025",amt:20000000, sp:87.3400, pr:1.5860,tot:88.9260, val:1778520000,    del:"30.06.2026"},
+  {id:"m6",  bk:"SBI",   cc:"USD",st:"INR",num:"0853626FP0B00001", dt:"06.02.2026",amt:15000000, sp:90.7500, pr:2.2550,tot:93.0050, val:1395075000,    del:"29.01.2027"},
+  {id:"m7",  bk:"SBI",   cc:"EUR",st:"INR",num:"0853626FP0B00002", dt:"10.02.2026",amt:13000000, sp:107.8650,pr:1.2500,tot:109.1150,val:1418495000,    del:"29.05.2026"},
+  {id:"m8",  bk:"HDFC",  cc:"USD",st:"INR",num:"63527990",          dt:"13.06.2025",amt:5000000,  sp:86.1450, pr:1.5535,tot:87.6985, val:438492500,     del:"29.05.2026"},
+  {id:"m9",  bk:"HDFC",  cc:"USD",st:"INR",num:"63527678",          dt:"13.06.2025",amt:5000000,  sp:86.1375, pr:1.5535,tot:87.6910, val:438455000,     del:"29.05.2026"},
+  {id:"m10", bk:"HDFC",  cc:"USD",st:"INR",num:"65898375",          dt:"18.08.2025",amt:5000000,  sp:87.3900, pr:1.3750,tot:88.7650, val:443825000,     del:"29.05.2026"},
+  {id:"m11", bk:"HDFC",  cc:"USD",st:"INR",num:"69380670",          dt:"21.11.2025",amt:10000000, sp:89.4500, pr:1.7825,tot:91.2325, val:912325000,     del:"30.10.2026"},
+  {id:"m12", bk:"HDFC",  cc:"USD",st:"INR",num:"70127794",          dt:"11.12.2025",amt:20000000, sp:90.2575, pr:2.2650,tot:92.5225, val:1850450000,    del:"30.11.2026"},
+  {id:"m13", bk:"HDFC",  cc:"USD",st:"INR",num:"75361551",          dt:"06.05.2026",amt:5000000,  sp:94.5200, pr:1.7850,tot:96.3050, val:481525000,     del:"31.12.2026"},
+  {id:"m14", bk:"HDFC",  cc:"EUR",st:"INR",num:"69842853",          dt:"03.12.2025",amt:7369156,  sp:105.1732,pr:4.2500,tot:109.4232,val:806356630.82,  del:"30.11.2026"},
+  {id:"m15", bk:"HDFC",  cc:"EUR",st:"INR",num:"70928281",          dt:"02.01.2026",amt:5000000,  sp:105.8125,pr:3.7450,tot:109.5575,val:547787500,     del:"30.11.2026"},
+  {id:"m16", bk:"HDFC",  cc:"EUR",st:"USD",num:"70197315",          dt:"12.12.2025",amt:247000,   sp:1.1736,  pr:0.0106,tot:1.18415, val:292485.05,     del:"30.06.2026"},
+  {id:"m17", bk:"HDFC",  cc:"EUR",st:"USD",num:"70589073",          dt:"23.12.2025",amt:177000,   sp:1.1785,  pr:0.0095,tot:1.18795, val:210267.15,     del:"30.06.2026"},
+  {id:"m18", bk:"HDFC",  cc:"EUR",st:"USD",num:"74616697",          dt:"16.04.2026",amt:3500000,  sp:null,    pr:null,  tot:1.18600, val:4151000,       del:"30.09.2026"},
+  {id:"m19", bk:"UNION", cc:"USD",st:"INR",num:"73360MP2517026",    dt:"10.10.2025",amt:5000000,  sp:88.5600, pr:1.8775,tot:90.4375, val:452187500,     del:"30.09.2026"},
+  {id:"m20", bk:"UNION", cc:"USD",st:"INR",num:"73360MP2518636",    dt:"05.12.2025",amt:20000000, sp:89.9238, pr:1.2500,tot:91.1738, val:1823476000,    del:"30.06.2026"},
+  {id:"m21", bk:"UNION", cc:"USD",st:"INR",num:"73360MP2619484",    dt:"02.01.2026",amt:10000000, sp:90.1425, pr:1.9750,tot:92.1175, val:921175000,     del:"30.11.2026"},
+  {id:"m22", bk:"UNION", cc:"EUR",st:"USD",num:"73360MP2519263",    dt:"23.12.2025",amt:3700000,  sp:1.1784,  pr:0.0148,tot:1.1932,  val:4414840,       del:"30.10.2026"},
+  {id:"m23", bk:"UNION", cc:"EUR",st:"USD",num:"73360MP2619981",    dt:"23.01.2026",amt:3400000,  sp:1.1736,  pr:0.0142,tot:1.1878,  val:4038520,       del:"30.10.2026"},
+];
+const OPTS = [
+  {id:"o1",bk:"SBI",type:"Risk reversal",dt:"20.03.2026",not:30000000,bp:93.4975,sc:95.0000,cost:0,win:"25/30 June 2026"},
+  {id:"o2",bk:"SBI",type:"Risk reversal",dt:"21.03.2026",not:20000000,bp:94.0000,sc:96.6500,cost:0,win:"25/30 Sept 2026"},
+];
+const AWAIT_SEED = [
+  {id:"a1",dt:"12.09.2025",desc:"Senegal — MV Supra Duke",  mt:"37,000 MT",amt:8703860,cc:"EUR",bk:"HDFC"},
+  {id:"a2",dt:"18.01.2026",desc:"ADC — Abidjan — 100 FCL",  mt:"2,600 MT", amt:928200, cc:"EUR",bk:"HDFC"},
+  {id:"a3",dt:"24.01.2026",desc:"ADC — Abidjan — 75 FCL",   mt:"1,950 MT", amt:696150, cc:"EUR",bk:"HDFC"},
+];
+const INFLOW_SEED = [
+  {id:"i1",source:"Senegal 1",cc:"EUR",original:17000000, received:0,date:"30.05.2026"},
+  {id:"i2",source:"Burkina",  cc:"EUR",original:15800000, received:0,date:"30.05.2026"},
+  {id:"i3",source:"Burkina 2",cc:"USD",original:18855000, received:0,date:"30.06.2026"},
+  {id:"i4",source:"Burkina 3",cc:"USD",original:5062500,  received:0,date:"30.06.2026"},
+  {id:"i5",source:"LDC",      cc:"USD",original:1700000,  received:0,date:"30.05.2026"},
+  {id:"i6",source:"Senegal 2",cc:"EUR",original:4650000,  received:0,date:"30.09.2026"},
+  {id:"i7",source:"Senegal 3",cc:"EUR",original:7100000,  received:0,date:"30.09.2026"},
+  {id:"i8",source:"China",    cc:"USD",original:42225260, received:0,date:"Scattered"},
+];
+const LIMITS_SEED = [
+  {bk:"DBS",  limit:40.00,  availed:0.00 },
+  {bk:"SBI",  limit:277.78, availed:14.21},
+  {bk:"UNION",limit:67.28,  availed:43.45},
+  {bk:"HDFC", limit:70.00,  availed:69.21},
+];
+const seedMaster   = () => MASTER_SEED.map(c=>({...c,used:0}));
+const seedPersonal = () => MASTER_SEED.map(c=>({...c,used:0}));
+
+// ── Style tokens ──────────────────────────────────────────────────────────────
+const T = {
+  hd:   {fontSize:10,fontWeight:500,textTransform:"uppercase",letterSpacing:"0.06em",color:"#999",padding:"5px 8px 5px 0",borderBottom:"0.5px solid #e5e5e3",textAlign:"left",whiteSpace:"nowrap"},
+  td:   {fontSize:12,padding:"8px 8px 8px 0",borderBottom:"0.5px solid #f0f0ee",verticalAlign:"middle",whiteSpace:"nowrap"},
+  mono: {fontFamily:"ui-monospace,'Cascadia Code','Source Code Pro',monospace",fontSize:11},
+  r:    {textAlign:"right",fontVariantNumeric:"tabular-nums"},
+  card: {background:"#f7f7f5",borderRadius:8,padding:"12px 14px"},
+  cL:   {fontSize:10,color:"#999",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:3},
+  cV:   {fontSize:17,fontWeight:500,fontVariantNumeric:"tabular-nums"},
+  cS:   {fontSize:11,color:"#bbb",marginTop:2},
+  lbl:  {display:"block",fontSize:10,fontWeight:500,color:"#888",textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:5},
+  inp:  {width:"100%",padding:"7px 10px",fontSize:13,border:"0.5px solid #ddd",borderRadius:6,outline:"none",background:"#fff",boxSizing:"border-box"},
+  btn:  {padding:"8px 18px",fontSize:13,fontWeight:500,border:"none",borderRadius:6,background:"#0f0f0f",color:"#fff",cursor:"pointer"},
+  btnG: {padding:"7px 14px",fontSize:12,fontWeight:500,border:"0.5px solid #ddd",borderRadius:6,background:"#fff",color:"#555",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:5},
+};
+
+// ── Inline SVG icons ──────────────────────────────────────────────────────────
+const Ico = ({d,size=15,style:st={}}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={st}>
+    {(Array.isArray(d)?d:[d]).map((p,i)=><path key={i} d={p}/>)}
+  </svg>
+);
+const IcoDashboard   = (p) => <Ico {...p} d={["M3 3h7v7H3z","M13 3h8v7h-8z","M13 13h8v8h-8z","M3 13h7v8H3z"]}/>;
+const IcoContracts   = (p) => <Ico {...p} d={["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z","M14 2v6h6","M16 13H8","M16 17H8","M10 9H8"]}/>;
+const IcoInflow      = (p) => <Ico {...p} d="M23 6l-9.5 9.5-5-5L1 18 M17 6h6v6"/>;
+const IcoReceipts    = (p) => <Ico {...p} d={["M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2","M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2z","M9 12h6","M9 16h6"]}/>;
+const IcoLimits      = (p) => <Ico {...p} d={["M3 21l1.65-3.8a9 9 0 1 1 3.4 2.9L3 21","M9 9a3 3 0 1 0 6 0 3 3 0 0 0-6 0"]}/>;
+const IcoAwaiting    = (p) => <Ico {...p} d={["M12 22c5.52 0 10-4.48 10-10S17.52 2 12 2 2 6.48 2 12s4.48 10 10 10z","M12 6v6l4 2"]}/>;
+const IcoRecon       = (p) => <Ico {...p} d={["M18 6H5a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h13l4-3.5L18 6z","M12 13v9","M12 2v3"]}/>;
+const IcoBackups     = (p) => <Ico {...p} d={["M12 22c5.52 0 10-4.48 10-10S17.52 2 12 2 2 6.48 2 12s4.48 10 10 10z","M12 6v6l4 2","M7.5 15.5A8 8 0 0 1 12 4"]}/>;
+const IcoAlert       = (p) => <Ico {...p} d={["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"]}/>;
+const IcoChevron     = (p) => <Ico {...p} d="m6 9 6 6 6-6"/>;
+const IcoPlus        = (p) => <Ico {...p} d="M12 5v14M5 12h14"/>;
+const IcoReverse     = (p) => <Ico {...p} d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5"/>;
+const IcoDownload    = (p) => <Ico {...p} d={["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3"]}/>;
+const IcoUpload      = (p) => <Ico {...p} d={["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M17 8l-5-5-5 5","M12 3v12"]}/>;
+const IcoSave        = (p) => <Ico {...p} d={["M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z","M17 21v-8H7v8","M7 3v5h8"]}/>;
+const IcoRestore     = (p) => <Ico {...p} d={["M1 4v6h6","M23 20v-6h-6","M20.49 9A9 9 0 0 0 5.64 5.64L1 10 M23 14l-4.64 4.36A9 9 0 0 1 3.51 15"]}/>;
+const IcoTrash       = (p) => <Ico {...p} d={["M3 6h18","M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"]}/>;
+
+// ── Nav ───────────────────────────────────────────────────────────────────────
+const NAV = [
+  {id:"dashboard",label:"Dashboard",  Ic:IcoDashboard },
+  {id:"contracts", label:"Contracts", Ic:IcoContracts  },
+  {id:"inflow",    label:"In flow",   Ic:IcoInflow     },
+  {id:"receipts",  label:"Receipts",  Ic:IcoReceipts   },
+  {id:"limits",    label:"Limits",    Ic:IcoLimits     },
+  {id:"awaiting",  label:"Awaiting",  Ic:IcoAwaiting   },
+  {id:"recon",     label:"Reconcile", Ic:IcoRecon      },
+  {id:"backups",   label:"Backups",   Ic:IcoBackups    },
+];
+function TopNav({page,setPage}) {
+  return (
+    <div style={{borderBottom:"1px solid #e5e5e3",marginBottom:24,display:"flex",flexWrap:"wrap"}}>
+      {NAV.map(n=>{
+        const active=page===n.id;
+        return (
+          <button key={n.id} onClick={()=>setPage(n.id)} style={{
+            display:"flex",alignItems:"center",gap:6,padding:"9px 13px",border:"none",
+            background:"none",cursor:"pointer",
+            borderBottom:active?"2px solid #0f0f0f":"2px solid transparent",
+            marginBottom:-1,fontSize:12,fontWeight:active?500:400,
+            color:active?"#0f0f0f":"#666",
+          }}>
+            <n.Ic size={14}/>{n.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Shared components ─────────────────────────────────────────────────────────
+function PH({title,sub}) {
+  return <div style={{marginBottom:20}}><h1 style={{fontSize:18,fontWeight:500,margin:0}}>{title}</h1>{sub&&<p style={{fontSize:12,color:"#888",margin:"4px 0 0"}}>{sub}</p>}</div>;
+}
+function CcyTag({cc}) {
+  const c={EUR:{bg:"#E6F1FB",color:"#0C447C"},USD:{bg:"#EAF3DE",color:"#3B6D11"},INR:{bg:"#FAEEDA",color:"#633806"}}[cc]||{bg:"#f0f0f0",color:"#555"};
+  return <span style={{fontSize:10,fontWeight:500,padding:"1px 6px",borderRadius:3,background:c.bg,color:c.color}}>{cc}</span>;
+}
+function Cards({items}) {
+  return (
+    <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(items.length,4)},minmax(0,1fr))`,gap:10,marginBottom:22}}>
+      {items.map((c,i)=>(
+        <div key={i} style={T.card}>
+          <div style={T.cL}>{c.label}</div>
+          <div style={T.cV}>{c.value}</div>
+          {c.sub&&<div style={T.cS}>{c.sub}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+function Bar({pct,width=72}) {
+  const clr=pct>50?"#5DCAA5":pct>20?"#EF9F27":"#E24B4A";
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:5}}>
+      <span style={{display:"inline-block",width,height:4,background:"#eee",borderRadius:2,overflow:"hidden"}}>
+        <span style={{display:"block",height:"100%",width:`${pct}%`,background:clr,borderRadius:2}}/>
+      </span>
+      <span style={{fontSize:10,color:"#999"}}>{pct}%</span>
+    </span>
+  );
+}
+
+// ── Contracts ─────────────────────────────────────────────────────────────────
+function groupByBankPair(data) {
+  const out={};
+  data.forEach(c=>{
+    if(!out[c.bk])out[c.bk]={};
+    const k=`${c.cc}→${c.st}`;
+    if(!out[c.bk][k])out[c.bk][k]=[];
+    out[c.bk][k].push(c);
+  });
+  return out;
+}
+function ContractTable({rows,pair}) {
+  const [cc,st]=pair.split("→");
+  const totAmt=rows.reduce((s,r)=>s+r.amt,0);
+  const totVal=rows.reduce((s,r)=>s+r.val,0);
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:12,fontWeight:500,color:"#555",marginBottom:6,display:"flex",alignItems:"center",gap:6}}>
+        <CcyTag cc={cc}/><span style={{color:"#ccc"}}>→</span><CcyTag cc={st}/>
+        <span style={{fontSize:11,color:"#bbb",marginLeft:"auto"}}>{rows.length} contract{rows.length!==1?"s":""}</span>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr>
+            <th style={T.hd}>Contract #</th><th style={T.hd}>Date</th>
+            <th style={{...T.hd,...T.r}}>Amount {cc}</th><th style={{...T.hd,...T.r}}>Spot</th>
+            <th style={{...T.hd,...T.r}}>Prem.</th><th style={{...T.hd,...T.r}}>Total</th>
+            <th style={{...T.hd,...T.r}}>Value {st}</th><th style={T.hd}>Delivery</th>
+            <th style={{...T.hd,...T.r}}>Used</th>
+          </tr></thead>
+          <tbody>
+            {rows.map(c=>(
+              <tr key={c.id}>
+                <td style={{...T.td,...T.mono}}>{c.num}</td>
+                <td style={{...T.td,color:"#888",fontSize:11}}>{c.dt}</td>
+                <td style={{...T.td,...T.r,...T.mono}}>{f(c.amt,cc)}</td>
+                <td style={{...T.td,...T.r,color:"#888",fontSize:11}}>{fR(c.sp)}</td>
+                <td style={{...T.td,...T.r,color:"#888",fontSize:11}}>{fR(c.pr)}</td>
+                <td style={{...T.td,...T.r,fontWeight:500,...T.mono}}>{fR(c.tot)}</td>
+                <td style={{...T.td,...T.r,...T.mono}}>{f(c.val,st)}</td>
+                <td style={{...T.td,color:"#888",fontSize:11}}>{c.del}</td>
+                <td style={{...T.td,...T.r,...T.mono,color:c.used>0?"#0F6E56":"#ccc"}}>{c.used>0?f(c.used,cc):"—"}</td>
+              </tr>
+            ))}
+            <tr>
+              <td colSpan={2} style={{...T.td,fontSize:11,fontWeight:500,color:"#888",borderBottom:"none",paddingTop:10}}>Subtotal</td>
+              <td style={{...T.td,...T.r,...T.mono,fontWeight:500,borderBottom:"none",paddingTop:10}}>{f(totAmt,cc)}</td>
+              <td colSpan={3} style={{...T.td,borderBottom:"none"}}/>
+              <td style={{...T.td,...T.r,...T.mono,fontWeight:500,borderBottom:"none",paddingTop:10}}>{f(totVal,st)}</td>
+              <td colSpan={2} style={{...T.td,borderBottom:"none"}}/>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function BankBlock({bank,pairs}) {
+  const [open,setOpen]=useState(true);
+  const opts=OPTS.filter(o=>o.bk===bank);
+  const total=Object.values(pairs).reduce((s,r)=>s+r.length,0);
+  return (
+    <div style={{marginBottom:28,borderLeft:`3px solid ${BANK_CLR[bank]}`,paddingLeft:16}}>
+      <div onClick={()=>setOpen(!open)} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",marginBottom:open?14:0}}>
+        <IcoChevron size={14} style={{transform:open?"rotate(0)":"rotate(-90deg)",transition:"transform .15s",color:"#888"}}/>
+        <span style={{fontSize:11,fontWeight:500,textTransform:"uppercase",letterSpacing:"0.08em",color:BANK_CLR[bank]}}>{BANK_LABEL[bank]}</span>
+        <span style={{fontSize:10,color:"#bbb",marginLeft:"auto"}}>{total} forwards{opts.length>0?` + ${opts.length} options`:""}</span>
+      </div>
+      {open&&<>
+        {Object.entries(pairs).map(([pair,rows])=><ContractTable key={pair} rows={rows} pair={pair}/>)}
+        {opts.length>0&&(
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:12,fontWeight:500,color:"#555",marginBottom:6}}>
+              <span style={{fontSize:10,fontWeight:500,padding:"1px 6px",borderRadius:3,background:"#FAEEDA",color:"#633806"}}>USD options · Risk reversals</span>
+            </div>
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead><tr>
+                <th style={T.hd}>Type</th><th style={T.hd}>Date</th>
+                <th style={{...T.hd,...T.r}}>Notional</th><th style={{...T.hd,...T.r}}>Buy put</th>
+                <th style={{...T.hd,...T.r}}>Sell call</th><th style={T.hd}>Window</th>
+              </tr></thead>
+              <tbody>{opts.map(o=>(
+                <tr key={o.id}>
+                  <td style={T.td}>{o.type}</td>
+                  <td style={{...T.td,color:"#888",fontSize:11}}>{o.dt}</td>
+                  <td style={{...T.td,...T.r,...T.mono}}>{f(o.not,"USD")}</td>
+                  <td style={{...T.td,...T.r,...T.mono}}>{fR(o.bp)}</td>
+                  <td style={{...T.td,...T.r,...T.mono}}>{fR(o.sc)}</td>
+                  <td style={{...T.td,color:"#888",fontSize:11}}>{o.win}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </>}
+    </div>
+  );
+}
+function ContractsPage({master,personal}) {
+  const [tab,setTab]=useState("master");
+  const data=tab==="master"?master:personal;
+  const grouped=useMemo(()=>groupByBankPair(data),[data]);
+  const eurAmt=data.filter(c=>c.cc==="EUR").reduce((s,c)=>s+c.amt,0);
+  const usdAmt=data.filter(c=>c.cc==="USD").reduce((s,c)=>s+c.amt,0);
+  const inrVal=data.filter(c=>c.st==="INR").reduce((s,c)=>s+c.val,0);
+  return (
+    <div>
+      <PH title="Forward contracts" sub="Outstanding as on 24.02.2026 · All banks"/>
+      <div style={{display:"flex",marginBottom:20}}>
+        {[{id:"master",label:"Master"},{id:"personal",label:"My copy"}].map((t,i)=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{
+            padding:"7px 16px",fontSize:12,fontWeight:tab===t.id?500:400,
+            border:"0.5px solid #ddd",borderRight:i===0?"none":"0.5px solid #ddd",
+            background:tab===t.id?"#0f0f0f":"#fff",color:tab===t.id?"#fff":"#555",
+            cursor:"pointer",borderRadius:i===0?"6px 0 0 6px":"0 6px 6px 0",
+          }}>{t.label}</button>
+        ))}
+      </div>
+      <Cards items={[
+        {label:"EUR exposure",   value:fM(eurAmt,"EUR")},
+        {label:"USD exposure",   value:fM(usdAmt,"USD")},
+        {label:"INR commitment", value:fM(inrVal,"INR")},
+        {label:"Contracts",      value:String(data.length)},
+      ]}/>
+      {["SBI","HDFC","UNION"].map(bk=>grouped[bk]?<BankBlock key={bk} bank={bk} pairs={grouped[bk]}/>:null)}
+    </div>
+  );
+}
+
+// ── In Flow ───────────────────────────────────────────────────────────────────
+function InflowPage({inflow,setInflow,bump}) {
+  const [adding,setAdding]=useState(false);
+  const [ns,setNs]=useState(""); const [nc,setNc]=useState("EUR");
+  const [na,setNa]=useState(""); const [nd,setNd]=useState("");
+  const eurRem=inflow.filter(i=>i.cc==="EUR").reduce((s,i)=>s+(i.original-i.received),0);
+  const usdRem=inflow.filter(i=>i.cc==="USD").reduce((s,i)=>s+(i.original-i.received),0);
+  const add=async()=>{
+    if(!ns.trim()||!na||!nd.trim())return;
+    const next=[...inflow,{id:"i"+Date.now(),source:ns.trim(),cc:nc,original:parseFloat(na),received:0,date:nd.trim()}];
+    setInflow(next); LS.set(K.inflow,next);
+    bump(`Inflow source added · ${ns.trim()} · ${nc} ${fM(parseFloat(na),nc)}`,{inflow:next});
+    setNs(""); setNa(""); setNd(""); setAdding(false);
+  };
+  return (
+    <div>
+      <PH title="In flow" sub="Expected trade receivables · Running balances"/>
+      <Cards items={[
+        {label:"EUR remaining",value:fM(eurRem,"EUR"),sub:"receivable balance"},
+        {label:"USD remaining",value:fM(usdRem,"USD"),sub:"receivable balance"},
+        {label:"Active heads", value:String(inflow.filter(i=>i.original-i.received>0).length),sub:`of ${inflow.length} total`},
+      ]}/>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead><tr>
+          <th style={T.hd}>Source</th><th style={T.hd}></th>
+          <th style={{...T.hd,...T.r}}>Original</th>
+          <th style={{...T.hd,...T.r}}>Received</th>
+          <th style={{...T.hd,...T.r}}>Remaining</th>
+          <th style={T.hd}>Due</th><th style={T.hd}>Status</th>
+        </tr></thead>
+        <tbody>{inflow.map(i=>{
+          const rem=i.original-i.received, pct=Math.round((rem/i.original)*100);
+          return (
+            <tr key={i.id}>
+              <td style={{...T.td,fontWeight:500}}>{i.source}</td>
+              <td style={T.td}><CcyTag cc={i.cc}/></td>
+              <td style={{...T.td,...T.r,...T.mono,color:"#aaa"}}>{f(i.original,i.cc)}</td>
+              <td style={{...T.td,...T.r,...T.mono}}>{i.received>0?f(i.received,i.cc):"—"}</td>
+              <td style={{...T.td,...T.r,...T.mono,fontWeight:500}}>{f(rem,i.cc)}</td>
+              <td style={{...T.td,color:"#888",fontSize:11}}>{i.date}</td>
+              <td style={T.td}><Bar pct={pct}/></td>
+            </tr>
+          );
+        })}</tbody>
+      </table>
+      {adding?(
+        <div style={{marginTop:16,padding:16,background:"#f7f7f5",borderRadius:8}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 80px 1fr 1fr",gap:12,marginBottom:12}}>
+            <div><label style={T.lbl}>Source</label><input style={T.inp} value={ns} onChange={e=>setNs(e.target.value)} placeholder="e.g. Ghana 1"/></div>
+            <div><label style={T.lbl}>Ccy</label><select style={T.inp} value={nc} onChange={e=>setNc(e.target.value)}><option>EUR</option><option>USD</option></select></div>
+            <div><label style={T.lbl}>Amount</label><input style={T.inp} type="number" value={na} onChange={e=>setNa(e.target.value)} placeholder="0.00"/></div>
+            <div><label style={T.lbl}>Due date</label><input style={T.inp} value={nd} onChange={e=>setNd(e.target.value)} placeholder="DD.MM.YYYY"/></div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button style={T.btn} onClick={add}>Add</button>
+            <button style={T.btnG} onClick={()=>setAdding(false)}>Cancel</button>
+          </div>
+        </div>
+      ):(
+        <button style={{...T.btnG,marginTop:16}} onClick={()=>setAdding(true)}><IcoPlus size={14}/>Add source</button>
+      )}
+    </div>
+  );
+}
+
+// ── Receipts ──────────────────────────────────────────────────────────────────
+function ReceiptsPage({inflow,setInflow,personal,setPersonal,master,setMaster,receipts,setReceipts,bump}) {
+  const [srcId,setSrcId]=useState(""); const [bankId,setBankId]=useState("");
+  const [ctrId,setCtrId]=useState(""); const [amt,setAmt]=useState("");
+  const [date,setDate]=useState(todayISO()); const [note,setNote]=useState("");
+  const [msg,setMsg]=useState(null);
+  const src=inflow.find(i=>i.id===srcId);
+  const ctr=personal.find(c=>c.id===ctrId);
+  const srcRem=src?src.original-src.received:0;
+  const ctrRem=ctr?ctr.amt-ctr.used:0;
+  const amtN=parseFloat(amt)||0;
+  const limit=Math.min(srcRem,ctr?ctrRem:Infinity);
+  const overLt=amtN>0&&amtN>limit;
+  const banks=useMemo(()=>{
+    if(!src)return[];
+    return [...new Set(personal.filter(c=>c.cc===src.cc&&(c.amt-c.used)>0).map(c=>c.bk))];
+  },[src,personal]);
+  const ctrs=useMemo(()=>{
+    if(!src||!bankId)return[];
+    return personal.filter(c=>c.bk===bankId&&c.cc===src.cc&&(c.amt-c.used)>0);
+  },[src,bankId,personal]);
+  const flash=(text,err=false)=>{setMsg({text,err});setTimeout(()=>setMsg(null),4500);};
+  const submit=async()=>{
+    if(!src){flash("Select an inflow source",true);return;}
+    if(!ctr){flash("Select a forward contract",true);return;}
+    if(amtN<=0){flash("Enter a valid amount",true);return;}
+    if(amtN>srcRem){flash(`Exceeds inflow balance (${f(srcRem,src.cc)})`,true);return;}
+    if(amtN>ctrRem){flash(`Exceeds contract capacity (${f(ctrRem,ctr.cc)})`,true);return;}
+    const nI=inflow.map(i=>i.id===srcId?{...i,received:i.received+amtN}:i);
+    const nP=personal.map(c=>c.id===ctrId?{...c,used:c.used+amtN}:c);
+    const nM=master.map(c=>c.id===ctrId?{...c,used:c.used+amtN}:c);
+    const entry={id:Date.now(),date,srcId,ctrId,amt:amtN,note:note.trim(),srcName:src.source,ctrNum:ctr.num,bk:ctr.bk,cc:src.cc};
+    const nR=[entry,...receipts];
+    setInflow(nI); setPersonal(nP); setMaster(nM); setReceipts(nR);
+    LS.set(K.inflow,nI); LS.set(K.personal,nP); LS.set(K.master,nM); LS.set(K.receipts,nR);
+    bump(`Receipt · ${src.source} · ${f(amtN,src.cc)} · ${ctr.bk} ${ctr.num}`,{inflow:nI,master:nM,personal:nP,receipts:nR});
+    flash(`✓ Logged ${f(amtN,src.cc)} · ${src.source} → ${ctr.bk} ${ctr.num}`);
+    setAmt(""); setNote(""); setSrcId(""); setBankId(""); setCtrId("");
+  };
+  const reverse=async(id)=>{
+    const e=receipts.find(r=>r.id===id); if(!e)return;
+    const nI=inflow.map(i=>i.id===e.srcId?{...i,received:Math.max(0,i.received-e.amt)}:i);
+    const nP=personal.map(c=>c.id===e.ctrId?{...c,used:Math.max(0,c.used-e.amt)}:c);
+    const nM=master.map(c=>c.id===e.ctrId?{...c,used:Math.max(0,c.used-e.amt)}:c);
+    const nR=receipts.filter(r=>r.id!==id);
+    setInflow(nI); setPersonal(nP); setMaster(nM); setReceipts(nR);
+    LS.set(K.inflow,nI); LS.set(K.personal,nP); LS.set(K.master,nM); LS.set(K.receipts,nR);
+    bump(`Reversed · ${e.srcName} · ${f(e.amt,e.cc)}`,{inflow:nI,master:nM,personal:nP,receipts:nR});
+    flash(`Reversed ${f(e.amt,e.cc)} from ${e.srcName}`);
+  };
+  return (
+    <div>
+      <PH title="Log receipt" sub="Daily credit — cascades to inflow balance + forward contract (master & copy)"/>
+      <div style={{padding:20,background:"#f7f7f5",borderRadius:10,marginBottom:28}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"14px 20px",marginBottom:16}}>
+          <div>
+            <label style={T.lbl}>Inflow source</label>
+            <select style={T.inp} value={srcId} onChange={e=>{setSrcId(e.target.value);setBankId("");setCtrId("");}}>
+              <option value="">— select —</option>
+              {inflow.map(i=>{const rem=i.original-i.received;return <option key={i.id} value={i.id}>{i.source} · {fM(rem,i.cc)} rem.</option>;})}
+            </select>
+            <div style={{fontSize:11,color:"#0F6E56",marginTop:3,minHeight:16}}>{src?`Balance: ${f(srcRem,src.cc)}`:""}</div>
+          </div>
+          <div>
+            <label style={T.lbl}>Amount {src&&<CcyTag cc={src.cc}/>}</label>
+            <input style={{...T.inp,borderColor:overLt?"#E24B4A":"#ddd"}} type="number" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0.00"/>
+            <div style={{fontSize:11,color:overLt?"#A32D2D":amtN>0?"#0F6E56":"transparent",marginTop:3,minHeight:16}}>
+              {overLt?`Over limit — max ${f(limit,src?.cc||"USD")}`:amtN>0?"Within limits":"."}
+            </div>
+          </div>
+          <div>
+            <label style={T.lbl}>Bank</label>
+            <select style={T.inp} value={bankId} onChange={e=>{setBankId(e.target.value);setCtrId("");}}>
+              <option value="">{src?"— select —":"— select source first —"}</option>
+              {banks.map(b=><option key={b} value={b}>{BANK_LABEL[b]||b}</option>)}
+            </select>
+            <div style={{fontSize:11,color:"#999",marginTop:3,minHeight:16}}>{bankId?`${ctrs.length} contract${ctrs.length!==1?"s":""} with capacity`:""}</div>
+          </div>
+          <div>
+            <label style={T.lbl}>Forward contract</label>
+            <select style={T.inp} value={ctrId} onChange={e=>setCtrId(e.target.value)}>
+              <option value="">{bankId?"— select —":"— select bank first —"}</option>
+              {ctrs.map(c=>{const r=c.amt-c.used;return <option key={c.id} value={c.id}>{c.num} · {fM(r,c.cc)} avail · del {c.del}</option>;})}
+            </select>
+            <div style={{fontSize:11,color:"#0F6E56",marginTop:3,minHeight:16}}>{ctr?`Available: ${f(ctrRem,ctr.cc)} · ${ctr.cc}→${ctr.st} · Delivery: ${ctr.del}`:""}</div>
+          </div>
+          <div>
+            <label style={T.lbl}>Value date</label>
+            <input style={T.inp} type="date" value={date} onChange={e=>setDate(e.target.value)}/>
+          </div>
+          <div>
+            <label style={T.lbl}>Remark</label>
+            <input style={T.inp} value={note} onChange={e=>setNote(e.target.value)} placeholder="e.g. partial · 1st tranche"/>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <button style={T.btn} onClick={submit}>Log receipt</button>
+          {msg&&<span style={{fontSize:12,color:msg.err?"#A32D2D":"#0F6E56"}}>{msg.text}</span>}
+        </div>
+      </div>
+      <h2 style={{fontSize:14,fontWeight:500,marginBottom:14}}>Receipt history</h2>
+      {receipts.length===0?(
+        <div style={{textAlign:"center",padding:"40px 20px",color:"#bbb",fontSize:13}}>No receipts logged yet.</div>
+      ):(
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr>
+            <th style={T.hd}>Date</th><th style={T.hd}>Source</th>
+            <th style={T.hd}>Bank · Contract</th><th style={{...T.hd,...T.r}}>Amount</th>
+            <th style={T.hd}>Remark</th><th style={{...T.hd,width:30}}></th>
+          </tr></thead>
+          <tbody>{receipts.map(e=>(
+            <tr key={e.id}>
+              <td style={{...T.td,color:"#888",fontSize:11}}>{e.date}</td>
+              <td style={{...T.td,fontWeight:500}}>{e.srcName}</td>
+              <td style={{...T.td,...T.mono,color:"#888"}}>{e.bk} · {e.ctrNum}</td>
+              <td style={{...T.td,...T.r,...T.mono,fontWeight:500}}>{f(e.amt,e.cc)}</td>
+              <td style={{...T.td,color:"#888",fontSize:11}}>{e.note||"—"}</td>
+              <td style={{...T.td,textAlign:"center"}}>
+                <button onClick={()=>reverse(e.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#bbb",padding:2}} title="Reverse entry">
+                  <IcoReverse size={13}/>
+                </button>
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// ── Limits ────────────────────────────────────────────────────────────────────
+function LimitsPage({limits}) {
+  const tot=limits.reduce((a,l)=>({limit:a.limit+l.limit,availed:a.availed+l.availed}),{limit:0,availed:0});
+  return (
+    <div>
+      <PH title="Bank credit limits" sub="Facility utilization · USD million"/>
+      <Cards items={[
+        {label:"Total limit",value:"$"+tot.limit.toFixed(2)+"M"},
+        {label:"Availed",    value:"$"+tot.availed.toFixed(2)+"M"},
+        {label:"Available",  value:"$"+(tot.limit-tot.availed).toFixed(2)+"M"},
+      ]}/>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        {limits.map((l,i)=>{
+          const bal=l.limit-l.availed, pct=l.limit>0?Math.round((l.availed/l.limit)*100):0;
+          const danger=pct>90, warn=pct>70;
+          return (
+            <div key={l.bk} style={{borderLeft:`3px solid ${BANK_CLR[l.bk]||"#ccc"}`,paddingLeft:16,paddingBottom:14,borderBottom:i<limits.length-1?"0.5px solid #f0f0ee":"none"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <span style={{fontSize:12,fontWeight:500,color:BANK_CLR[l.bk]}}>{l.bk}</span>
+                <span style={{fontSize:11,color:danger?"#A32D2D":warn?"#854F0B":"#888"}}>{pct}% utilized</span>
+              </div>
+              <div style={{height:6,background:"#eee",borderRadius:3,overflow:"hidden",marginBottom:10}}>
+                <div style={{height:"100%",borderRadius:3,width:`${pct}%`,background:danger?"#E24B4A":warn?"#EF9F27":"#5DCAA5",transition:"width .3s"}}/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,fontSize:12}}>
+                {[["Limit",`$${l.limit.toFixed(2)}M`],["Availed",`$${l.availed.toFixed(2)}M`],["Balance",`$${bal.toFixed(2)}M`]].map(([lbl,val],j)=>(
+                  <div key={j}><span style={{fontSize:10,color:"#999"}}>{lbl}</span><div style={{fontWeight:500,fontVariantNumeric:"tabular-nums",color:j===2&&danger?"#A32D2D":"#0f0f0f"}}>{val}</div></div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Awaiting ──────────────────────────────────────────────────────────────────
+function AwaitingPage() {
+  const total=AWAIT_SEED.reduce((s,a)=>s+a.amt,0);
+  return (
+    <div>
+      <PH title="Awaiting payment" sub="Pending payment instructions · HDFC"/>
+      <Cards items={[{label:"Total awaiting EUR",value:f(total,"EUR")}]}/>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead><tr>
+          <th style={T.hd}>Date</th><th style={T.hd}>Description</th>
+          <th style={T.hd}>Tonnage</th><th style={{...T.hd,...T.r}}>Amount</th><th style={T.hd}>Bank</th>
+        </tr></thead>
+        <tbody>{AWAIT_SEED.map(a=>(
+          <tr key={a.id}>
+            <td style={{...T.td,color:"#888",fontSize:11}}>{a.dt}</td>
+            <td style={T.td}>{a.desc}</td>
+            <td style={{...T.td,color:"#888",fontSize:11}}>{a.mt}</td>
+            <td style={{...T.td,...T.r,...T.mono}}>{f(a.amt,"EUR")}</td>
+            <td style={T.td}><span style={{fontSize:10,fontWeight:500,padding:"1px 6px",borderRadius:3,background:"#E6F1FB",color:"#0C447C"}}>{a.bk}</span></td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+function DashboardPage({personal,inflow,limits,receipts}) {
+  const eurHedge =personal.filter(c=>c.cc==="EUR").reduce((s,c)=>s+(c.amt-c.used),0);
+  const usdHedge =personal.filter(c=>c.cc==="USD").reduce((s,c)=>s+(c.amt-c.used),0);
+  const eurInflow=inflow.filter(i=>i.cc==="EUR").reduce((s,i)=>s+(i.original-i.received),0);
+  const usdInflow=inflow.filter(i=>i.cc==="USD").reduce((s,i)=>s+(i.original-i.received),0);
+  const hdfc=limits.find(l=>l.bk==="HDFC");
+  const hdfcPct=hdfc?Math.round((hdfc.availed/hdfc.limit)*100):0;
+  const urgentCtrs=personal.filter(c=>{const d=daysUntil(c.del);return d!==null&&d>=0&&d<=30&&(c.amt-c.used)>0;});
+  const monthMap={};
+  personal.forEach(c=>{
+    const d=parseDel(c.del); if(!d)return;
+    const label=d.toLocaleString("en-US",{month:"short",year:"numeric"});
+    const sortKey=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}`;
+    if(!monthMap[label])monthMap[label]={label,sortKey,eur:0,usd:0,count:0};
+    const rem=c.amt-c.used;
+    if(c.cc==="EUR")monthMap[label].eur+=rem;
+    if(c.cc==="USD")monthMap[label].usd+=rem;
+    monthMap[label].count++;
+  });
+  const months=Object.values(monthMap).sort((a,b)=>a.sortKey.localeCompare(b.sortKey));
+  const secHead={fontSize:11,fontWeight:500,color:"#999",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:12};
+  return (
+    <div>
+      <PH title="Dashboard" sub="Live position summary"/>
+      <Cards items={[
+        {label:"EUR hedged avail.", value:fM(eurHedge,"EUR"),  sub:"contract notional remaining"},
+        {label:"USD hedged avail.", value:fM(usdHedge,"USD"),  sub:"contract notional remaining"},
+        {label:"EUR in flow",       value:fM(eurInflow,"EUR"), sub:"receivable balance"},
+        {label:"USD in flow",       value:fM(usdInflow,"USD"), sub:"receivable balance"},
+      ]}/>
+      {(hdfcPct>=90||urgentCtrs.length>0)&&(
+        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
+          {hdfcPct>=90&&(
+            <div style={{background:"#FDF2F2",border:"0.5px solid #F5C6C6",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#A32D2D",display:"flex",gap:8,alignItems:"flex-start"}}>
+              <IcoAlert size={14} style={{marginTop:1,flexShrink:0}}/>
+              <span><strong>HDFC credit limit critical — </strong>{hdfcPct}% utilized (${hdfc.availed.toFixed(2)}M of ${hdfc.limit.toFixed(2)}M). Only ${(hdfc.limit-hdfc.availed).toFixed(2)}M remaining.</span>
+            </div>
+          )}
+          {urgentCtrs.length>0&&(
+            <div style={{background:"#FFF8F0",border:"0.5px solid #F5DDB0",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#854F0B",display:"flex",gap:8,alignItems:"flex-start"}}>
+              <IcoAlert size={14} style={{marginTop:1,flexShrink:0}}/>
+              <span><strong>{urgentCtrs.length} contract{urgentCtrs.length!==1?"s":""} delivering within 30 days</strong> with open notional: {urgentCtrs.map(c=>`${c.num} (${daysUntil(c.del)}d · ${fM(c.amt-c.used,c.cc)})`).join(" · ")}</span>
+            </div>
+          )}
+        </div>
+      )}
+      <h2 style={secHead}>Hedge vs inflow coverage</h2>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:28}}>
+        {[{cc:"EUR",hedge:eurHedge,inf:eurInflow},{cc:"USD",hedge:usdHedge,inf:usdInflow}].map(({cc,hedge,inf})=>{
+          const gap=hedge-inf, clr=cc==="EUR"?"#0C447C":"#3B6D11";
+          return (
+            <div key={cc} style={{...T.card,borderLeft:`3px solid ${clr}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <CcyTag cc={cc}/>
+                <span style={{fontSize:11,fontWeight:500,color:gap>=0?"#0F6E56":"#A32D2D"}}>{gap>=0?"Covered":"Shortfall"}</span>
+              </div>
+              <div style={{fontSize:12}}>
+                {[["Hedge avail.",hedge],["Inflow expected",inf]].map(([lbl,val])=>(
+                  <div key={lbl} style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                    <span style={{color:"#999"}}>{lbl}</span>
+                    <span style={{fontWeight:500,fontVariantNumeric:"tabular-nums"}}>{fM(val,cc)}</span>
+                  </div>
+                ))}
+                <div style={{display:"flex",justifyContent:"space-between",paddingTop:6,borderTop:"0.5px solid #e5e5e3"}}>
+                  <span style={{color:"#999"}}>Surplus / gap</span>
+                  <span style={{fontWeight:500,color:gap>=0?"#0F6E56":"#A32D2D",fontVariantNumeric:"tabular-nums"}}>{gap>=0?"+":""}{fM(gap,cc)}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <h2 style={secHead}>Delivery timeline</h2>
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>
+        <thead><tr>
+          <th style={T.hd}>Month</th><th style={{...T.hd,...T.r}}>EUR notional</th>
+          <th style={{...T.hd,...T.r}}>USD notional</th><th style={{...T.hd,...T.r}}>Contracts</th>
+        </tr></thead>
+        <tbody>{months.map(m=>{
+          const [mon,yr]=m.label.split(" ");
+          const d=new Date(`${mon} 1, ${yr}`);
+          const daysAway=Math.round((d-new Date())/(864e5));
+          const soon=daysAway>=0&&daysAway<=30;
+          return (
+            <tr key={m.label} style={soon?{background:"#FFF8F0"}:{}}>
+              <td style={{...T.td,fontWeight:soon?500:400}}>
+                {m.label}
+                {soon&&<span style={{marginLeft:6,fontSize:10,color:"#854F0B",background:"#F5DDB0",padding:"1px 5px",borderRadius:3}}>soon</span>}
+              </td>
+              <td style={{...T.td,...T.r,...T.mono}}>{m.eur>0?f(m.eur,"EUR"):"—"}</td>
+              <td style={{...T.td,...T.r,...T.mono}}>{m.usd>0?f(m.usd,"USD"):"—"}</td>
+              <td style={{...T.td,...T.r,color:"#888"}}>{m.count}</td>
+            </tr>
+          );
+        })}</tbody>
+      </table>
+      {receipts.length>0&&<>
+        <h2 style={secHead}>Recent receipts</h2>
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr>
+            <th style={T.hd}>Date</th><th style={T.hd}>Source</th>
+            <th style={T.hd}>Bank · Contract</th><th style={{...T.hd,...T.r}}>Amount</th>
+          </tr></thead>
+          <tbody>{receipts.slice(0,5).map(r=>(
+            <tr key={r.id}>
+              <td style={{...T.td,color:"#888",fontSize:11}}>{r.date}</td>
+              <td style={{...T.td,fontWeight:500}}>{r.srcName}</td>
+              <td style={{...T.td,...T.mono,color:"#888"}}>{r.bk} · {r.ctrNum}</td>
+              <td style={{...T.td,...T.r,...T.mono,fontWeight:500}}>{f(r.amt,r.cc)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </>}
+    </div>
+  );
+}
+
+// ── Reconciliation ────────────────────────────────────────────────────────────
+function ReconPage({personal}) {
+  const diffs=MASTER_SEED.map(m=>{
+    const p=personal.find(c=>c.id===m.id); if(!p)return null;
+    const amtDiff=p.amt-m.amt, valDiff=p.val-m.val;
+    if(amtDiff===0&&valDiff===0)return null;
+    return {id:m.id,bk:m.bk,num:m.num,cc:m.cc,st:m.st,mAmt:m.amt,pAmt:p.amt,amtDiff,mVal:m.val,pVal:p.val,valDiff};
+  }).filter(Boolean);
+  return (
+    <div>
+      <PH title="Reconciliation" sub="Master sheet vs your copy · discrepancy report"/>
+      <Cards items={[
+        {label:"Total contracts",    value:String(MASTER_SEED.length)},
+        {label:"Discrepancies found",value:String(diffs.length),sub:diffs.length>0?"needs review":"all clear"},
+        {label:"Clean contracts",    value:String(MASTER_SEED.length-diffs.length)},
+      ]}/>
+      {diffs.length===0?(
+        <div style={{textAlign:"center",padding:"40px 20px",color:"#bbb",fontSize:13}}>No discrepancies — your copy matches the master on all {MASTER_SEED.length} contracts.</div>
+      ):(
+        <>
+          <div style={{background:"#FFF8F0",border:"0.5px solid #F5DDB0",borderRadius:8,padding:"10px 14px",marginBottom:20,fontSize:12,color:"#854F0B",display:"flex",gap:8,alignItems:"flex-start"}}>
+            <IcoAlert size={14} style={{marginTop:1,flexShrink:0}}/>
+            <span>{diffs.length} contract{diffs.length!==1?"s":""} differ. Review and confirm before next reconciliation.</span>
+          </div>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr>
+              <th style={T.hd}>Bank</th><th style={T.hd}>Contract #</th><th style={T.hd}>Pair</th>
+              <th style={{...T.hd,...T.r}}>Master</th><th style={{...T.hd,...T.r}}>My copy</th><th style={{...T.hd,...T.r}}>Diff</th>
+            </tr></thead>
+            <tbody>{diffs.map(d=>(
+              <tr key={d.id} style={{background:"#FFF8F0"}}>
+                <td style={T.td}><span style={{fontSize:10,fontWeight:500,color:BANK_CLR[d.bk]}}>{d.bk}</span></td>
+                <td style={{...T.td,...T.mono}}>{d.num}</td>
+                <td style={T.td}><CcyTag cc={d.cc}/></td>
+                <td style={{...T.td,...T.r,...T.mono,color:"#888"}}>{f(d.mAmt,d.cc)}</td>
+                <td style={{...T.td,...T.r,...T.mono}}>{f(d.pAmt,d.cc)}</td>
+                <td style={{...T.td,...T.r,...T.mono,fontWeight:500,color:d.amtDiff>0?"#854F0B":"#A32D2D"}}>{d.amtDiff>0?"+":""}{f(d.amtDiff,d.cc)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Backups ───────────────────────────────────────────────────────────────────
+function BackupsPage({snapshots,setSnapshots,inflow,setInflow,master,setMaster,personal,setPersonal,receipts,setReceipts}) {
+  const [cpLabel,setCpLabel]=useState("");
+  const [savingCp,setSavingCp]=useState(false);
+  const [msg,setMsg]=useState(null);
+  const fileRef=useRef(null);
+  const flash=(text,err=false)=>{setMsg({text,err});setTimeout(()=>setMsg(null),4000);};
+
+  const saveCheckpoint=()=>{
+    if(!cpLabel.trim())return;
+    const snap={id:Date.now(),ts:new Date().toISOString(),label:fmtSnapLbl(),trigger:cpLabel.trim(),type:"manual",state:{inflow,master,personal,receipts}};
+    const manuals=snapshots.filter(s=>s.type==="manual");
+    const autos  =snapshots.filter(s=>s.type==="auto");
+    const next=[snap,...manuals].slice(0,20).concat(autos).sort((a,b)=>b.id-a.id);
+    setSnapshots(next); LS.set(K.snaps,next);
+    setCpLabel(""); setSavingCp(false);
+    flash(`Checkpoint saved: "${snap.trigger}"`);
+  };
+
+  const restore=(snap)=>{
+    if(!window.confirm(`Restore to snapshot:\n"${snap.trigger}"\n${snap.label}\n\nThis will replace all current data.`))return;
+    // Save current state as a manual checkpoint before restoring
+    const beforeSnap={id:Date.now(),ts:new Date().toISOString(),label:fmtSnapLbl(),trigger:`Before restore to: ${snap.label}`,type:"manual",state:{inflow,master,personal,receipts}};
+    const {inflow:i,master:m,personal:p,receipts:r}=snap.state;
+    setInflow(i); setMaster(m); setPersonal(p); setReceipts(r);
+    LS.set(K.inflow,i); LS.set(K.master,m); LS.set(K.personal,p); LS.set(K.receipts,r);
+    const manuals=[beforeSnap,...snapshots.filter(s=>s.type==="manual")].slice(0,20);
+    const autos=snapshots.filter(s=>s.type==="auto");
+    const next=[...manuals,...autos].sort((a,b)=>b.id-a.id);
+    setSnapshots(next); LS.set(K.snaps,next);
+    flash(`Restored to ${snap.label}`);
+  };
+
+  const deleteSnap=(id)=>{
+    const next=snapshots.filter(s=>s.id!==id);
+    setSnapshots(next); LS.set(K.snaps,next);
+  };
+
+  const exportAll=()=>{
+    const data={exportedAt:new Date().toISOString(),version:"1.0",inflow,master,personal,receipts,snapshots};
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download=`forex-backup-${fmtISO(todayISO())}.json`; a.click();
+    URL.revokeObjectURL(url);
+    flash("Full backup exported");
+  };
+
+  const exportSnap=(snap)=>{
+    const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),snapshot:snap},null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download=`forex-snap-${snap.label.replace(/[·: ]/g,"-")}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importFile=(e)=>{
+    const file=e.target.files[0]; if(!file)return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>{
+      try {
+        const data=JSON.parse(ev.target.result);
+        if(!data.inflow||!data.master||!data.personal||!data.receipts){flash("Invalid backup file — missing required fields",true);return;}
+        if(!window.confirm("Import this backup? All current data will be replaced."))return;
+        setInflow(data.inflow); setMaster(data.master); setPersonal(data.personal); setReceipts(data.receipts);
+        LS.set(K.inflow,data.inflow); LS.set(K.master,data.master); LS.set(K.personal,data.personal); LS.set(K.receipts,data.receipts);
+        if(data.snapshots){setSnapshots(data.snapshots);LS.set(K.snaps,data.snapshots);}
+        flash("Backup imported successfully");
+      } catch {flash("Failed to read file — is it a valid backup?",true);}
+    };
+    reader.readAsText(file);
+    e.target.value="";
+  };
+
+  const manuals =snapshots.filter(s=>s.type==="manual");
+  const autos   =snapshots.filter(s=>s.type==="auto");
+  const secHd={fontSize:11,fontWeight:500,color:"#999",textTransform:"uppercase",letterSpacing:"0.06em",margin:"20px 0 10px",paddingBottom:6,borderBottom:"0.5px solid #e5e5e3"};
+  const snapRow=(snap,showDel=true)=>(
+    <div key={snap.id} style={{display:"grid",gridTemplateColumns:"140px 1fr auto",gap:12,alignItems:"center",padding:"9px 0",borderBottom:"0.5px solid #f0f0ee"}}>
+      <div>
+        <div style={{fontSize:11,fontWeight:500,...T.mono}}>{snap.label}</div>
+        <span style={{fontSize:10,padding:"1px 5px",borderRadius:3,fontWeight:500,background:snap.type==="manual"?"#E6F1FB":"#f0f0ee",color:snap.type==="manual"?"#0C447C":"#888"}}>{snap.type==="manual"?"Checkpoint":"Auto-save"}</span>
+      </div>
+      <div style={{fontSize:12,color:"#555",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{snap.trigger}</div>
+      <div style={{display:"flex",gap:6,flexShrink:0}}>
+        <button onClick={()=>restore(snap)} style={{...T.btnG,fontSize:11,padding:"5px 10px"}}><IcoRestore size={12}/>Restore</button>
+        <button onClick={()=>exportSnap(snap)} style={{...T.btnG,fontSize:11,padding:"5px 8px"}} title="Download this snapshot"><IcoDownload size={12}/></button>
+        {showDel&&<button onClick={()=>deleteSnap(snap.id)} style={{...T.btnG,fontSize:11,padding:"5px 8px",color:"#ccc"}} title="Delete"><IcoTrash size={12}/></button>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <PH title="Backups" sub="Version history · auto-saves + manual checkpoints"/>
+      <Cards items={[
+        {label:"Auto-saves",    value:String(autos.length),   sub:"last 50 kept"},
+        {label:"Checkpoints",   value:String(manuals.length), sub:"last 20 kept"},
+        {label:"Total snapshots",value:String(snapshots.length)},
+      ]}/>
+
+      {/* Action bar */}
+      <div style={{display:"flex",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+        <button style={{...T.btnG}} onClick={()=>setSavingCp(true)}><IcoSave size={14}/>Save checkpoint</button>
+        <button style={{...T.btnG}} onClick={exportAll}><IcoDownload size={14}/>Export all data</button>
+        <button style={{...T.btnG}} onClick={()=>fileRef.current.click()}><IcoUpload size={14}/>Import from file</button>
+        <input ref={fileRef} type="file" accept=".json" style={{display:"none"}} onChange={importFile}/>
+      </div>
+      {msg&&<div style={{fontSize:12,color:msg.err?"#A32D2D":"#0F6E56",marginTop:8}}>{msg.text}</div>}
+
+      {/* Checkpoint form */}
+      {savingCp&&(
+        <div style={{marginTop:14,padding:14,background:"#f7f7f5",borderRadius:8}}>
+          <label style={T.lbl}>Checkpoint label</label>
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <input style={{...T.inp,flex:1}} value={cpLabel} onChange={e=>setCpLabel(e.target.value)} placeholder="e.g. Before adding Ghana contracts" autoFocus/>
+            <button style={T.btn} onClick={saveCheckpoint}>Save</button>
+            <button style={T.btnG} onClick={()=>setSavingCp(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Manual checkpoints */}
+      <div style={secHd}>Checkpoints <span style={{fontWeight:400,color:"#bbb",fontSize:10,marginLeft:6}}>kept until deleted or limit of 20</span></div>
+      {manuals.length===0?(
+        <div style={{color:"#bbb",fontSize:12,padding:"12px 0"}}>No checkpoints yet — save one before making a big change.</div>
+      ):manuals.map(s=>snapRow(s,true))}
+
+      {/* Auto-saves */}
+      <div style={secHd}>Auto-saves <span style={{fontWeight:400,color:"#bbb",fontSize:10,marginLeft:6}}>last 50 · saved on every receipt or change</span></div>
+      {autos.length===0?(
+        <div style={{color:"#bbb",fontSize:12,padding:"12px 0"}}>No auto-saves yet — they appear automatically when you log receipts.</div>
+      ):autos.map(s=>snapRow(s,false))}
+    </div>
+  );
+}
+
+// ── App root ──────────────────────────────────────────────────────────────────
+function App() {
+  const [page,setPage]               =useState("dashboard");
+  const [inflow,setInflow]           =useState(null);
+  const [master,setMaster]           =useState(null);
+  const [personal,setPersonal]       =useState(null);
+  const [receipts,setReceipts]       =useState([]);
+  const [limits,setLimits]           =useState(null);
+  const [snapshots,setSnapshots]     =useState([]);
+  const [lastUpdated,setLastUpdated] =useState(todayISO());
+  const [ready,setReady]             =useState(false);
+
+  useEffect(()=>{
+    const ms=seedMaster(), ps=seedPersonal();
+    setInflow(LS.get(K.inflow,INFLOW_SEED));
+    setMaster(LS.get(K.master,ms));
+    setPersonal(LS.get(K.personal,ps));
+    setReceipts(LS.get(K.receipts,[]));
+    setLimits(LS.get(K.limits,LIMITS_SEED));
+    setSnapshots(LS.get(K.snaps,[]));
+    setLastUpdated(LS.get(K.updated,todayISO()));
+    setReady(true);
+  },[]);
+
+  // bump: called on every data change — updates last-updated date + saves auto-snapshot
+  const bump=useCallback((trigger,newState)=>{
+    const d=todayISO();
+    setLastUpdated(d); LS.set(K.updated,d);
+    setSnapshots(prev=>{
+      const snap={id:Date.now(),ts:new Date().toISOString(),label:fmtSnapLbl(),trigger,type:"auto",
+        state:newState||{inflow,master,personal,receipts}};
+      const autos=[snap,...prev.filter(s=>s.type==="auto")].slice(0,50);
+      const manuals=prev.filter(s=>s.type==="manual");
+      const next=[...manuals,...autos].sort((a,b)=>b.id-a.id);
+      LS.set(K.snaps,next);
+      return next;
+    });
+  },[inflow,master,personal,receipts]);
+
+  if(!ready)return null;
+
+  return (
+    <div style={{maxWidth:760,margin:"0 auto",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif",padding:"0 16px"}}>
+      <div style={{paddingTop:10,marginBottom:4}}>
+        <span style={{fontSize:14,fontWeight:500,letterSpacing:"-0.01em"}}>
+          Forex Contract Updated as on {fmtISO(lastUpdated)}
+        </span>
+      </div>
+      <TopNav page={page} setPage={setPage}/>
+      {page==="dashboard" && <DashboardPage personal={personal} inflow={inflow} limits={limits} receipts={receipts}/>}
+      {page==="contracts" && <ContractsPage master={master} personal={personal}/>}
+      {page==="inflow"    && <InflowPage inflow={inflow} setInflow={setInflow} bump={bump}/>}
+      {page==="receipts"  && <ReceiptsPage inflow={inflow} setInflow={setInflow} personal={personal} setPersonal={setPersonal} master={master} setMaster={setMaster} receipts={receipts} setReceipts={setReceipts} bump={bump}/>}
+      {page==="limits"    && <LimitsPage limits={limits}/>}
+      {page==="awaiting"  && <AwaitingPage/>}
+      {page==="recon"     && <ReconPage personal={personal}/>}
+      {page==="backups"   && <BackupsPage snapshots={snapshots} setSnapshots={setSnapshots} inflow={inflow} setInflow={setInflow} master={master} setMaster={setMaster} personal={personal} setPersonal={setPersonal} receipts={receipts} setReceipts={setReceipts}/>}
+    </div>
+  );
+}
+
+const root=ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>
